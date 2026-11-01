@@ -578,7 +578,7 @@ The submission includes the QMD source file and rendered HTML report. The cleane
 
 ## GitHub Pages
 
-[View My GitHub Pages Report](https://willysu.github.io/case31-data-preparation/)
+[View My GitHub Pages Report](https://willysuu.github.io/case31-data-preparation/)
 
 ## GitHub Repository
 
