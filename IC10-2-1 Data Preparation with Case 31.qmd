@@ -1,0 +1,585 @@
+
+---
+title: "IC10-2-1 Data Preparation with Case 31"
+author: "Willy Su"
+date: "2026-10-31"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+execute:
+  warning: false
+  message: false
+editor: source
+---
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(haven)
+library(labelled)
+library(janitor)
+library(sjPlot)
+library(psych)
+library(skimr)
+library(gt)
+
+set_theme(theme_minimal())
+```
+
+# Import and Inspect the SPSS Data
+
+```{r}
+#| label: import-data
+
+data_raw <- read_sav("Case 31 Data_efcu_1.sav")
+
+dim(data_raw)
+names(data_raw)
+glimpse(data_raw)
+summary(data_raw)
+```
+
+## Questions to Answer
+
+The imported dataset contains 128 observations and 34 variables. Most variables are questionnaire items, identified by names such as q3 through q38.
+
+Two variables, `OverallEmployeePerformace` and `employeeperformance`, appear to be precomputed employee performance measures rather than original questionnaire items.
+
+A variable label describes the meaning of a variable, while a value label explains the meaning of a particular numeric response code. Both are important for interpreting the survey correctly.
+
+```{r}
+#| label: missing-raw
+
+data_raw |>
+  summarise(across(everything(), \(x) sum(is.na(x)))) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "n_missing"
+  ) |>
+  filter(n_missing > 0) |>
+  gt()
+```
+
+The missing-value check identifies q7, q8, and q37 as variables containing missing responses. Based on the assignment example, these have 10, 21, and 7 missing values, respectively.
+
+# Create a Data Dictionary
+
+```{r}
+#| label: dictionary
+
+data_dictionary <- tibble(
+  variable = names(data_raw),
+  variable_label = map_chr(
+    data_raw,
+    \(x) attr(x, "label") %||% ""
+  ),
+  class = map_chr(data_raw, \(x) class(x)[1]),
+  n_distinct = map_int(data_raw, n_distinct),
+  value_labels = map_chr(
+    data_raw,
+    \(x) {
+      labs <- attr(x, "labels")
+      if (is.null(labs)) {
+        ""
+      } else {
+        str_c(labs, "=", names(labs), collapse = "; ")
+      }
+    }
+  )
+)
+
+data_dictionary |> gt()
+```
+
+## Questions to Answer
+
+Most questionnaire variables already have useful labels. For example, q3 describes employee courtesy, q4 describes helpfulness, and q5 describes professionalism.
+
+However, some labels could be improved for readability and accuracy. In particular, q8 has a label that duplicates q9, even though the two questions use different response scales. The two precomputed employee performance variables also have missing variable labels.
+
+The variables have different measurement levels. Yes/no questions such as q27 are nominal. Service awareness questions q13 through q26 represent categories of awareness and usage. Agreement questions such as q3 through q6 are ordinal Likert-type items, which may be treated as approximately interval when evaluating a composite measure.
+
+Value labels are particularly important when numeric codes have different meanings, such as No Opinion, No Answer, or product awareness categories.
+
+# Improve the Metadata
+
+## Coding Instructions
+
+The questionnaire uses several response scales, including agreement, service awareness, yes/no, frequency, and overall ratings.
+
+The data dictionary helps identify incomplete labels and ensures that numeric values can be interpreted correctly.
+
+## Add and Correct Labels
+
+```{r}
+#| label: add-labels
+
+five_pt_likert <- c(
+  "Strongly Disagree" = 1,
+  "Disagree" = 2,
+  "Uncertain" = 3,
+  "Agree" = 4,
+  "Strongly Agree" = 5
+)
+
+awareness_labels <- c(
+  "Aware and Have Used" = 1,
+  "Aware but Have Not Used" = 2,
+  "Unaware" = 3
+)
+
+yes_no_labels <- c(
+  "Yes" = 1,
+  "No" = 2,
+  "No answer" = 3
+)
+
+data_labelled <- data_raw |>
+  mutate(
+    across(
+      c(q3:q6, q30:q34),
+      \(x) set_value_labels(x, five_pt_likert)
+    ),
+    across(
+      q13:q26,
+      \(x) set_value_labels(x, awareness_labels)
+    ),
+    across(
+      c(q11, q12, q27, q38),
+      \(x) set_value_labels(x, yes_no_labels)
+    ),
+    q37 = set_value_labels(
+      q37,
+      c(
+        "Excellent" = 1,
+        "Good" = 2,
+        "Average" = 3,
+        "Poor" = 4,
+        "Very Poor" = 5,
+        "No answer" = 6
+      )
+    )
+  ) |>
+  set_variable_labels(
+    q8 = "Borrowing Interest Rates",
+    OverallEmployeePerformace =
+      "Precomputed Overall Employee Performance",
+    employeeperformance =
+      "Precomputed Employee Performance"
+  )
+
+val_labels(data_labelled$q13)
+val_labels(data_labelled$q11)
+var_label(data_labelled$q8)
+```
+
+## Metadata Decisions
+
+The agreement items were assigned complete five-point response labels. Awareness variables were given three response categories, including Unaware. Yes/no questions were assigned a No Answer category.
+
+The two precomputed performance variables were given descriptive labels, but they will not be used in constructing new measures because their original calculation methods are not documented.
+
+The variable label for q8 was corrected from "statement frequency" to "Borrowing Interest Rates" based on the questionnaire. Unlike q9, which measures statement frequency, q8 uses a Very High to Very Low response scale.
+
+# Create an Analysis Copy
+
+```{r}
+#| label: analysis-copy
+
+data <- data_labelled |>
+  select(matches("^q\\d+$"))
+
+names(data)
+dim(data)
+```
+
+The analysis dataset retains only the original questionnaire variables. The two precomputed employee performance variables are excluded because the purpose of this assignment is to evaluate the survey items and determine whether new indexes are justified.
+
+The original dataset remains unchanged as `data_raw`.
+
+## Data Quality Checks
+
+```{r}
+#| label: quality-checks
+
+data |>
+  mutate(across(everything(), as.numeric)) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable"
+  ) |>
+  summarise(
+    values_observed = str_c(
+      sort(unique(value[!is.na(value)])),
+      collapse = ", "
+    ),
+    n_missing = sum(is.na(value)),
+    pct_missing = round(mean(is.na(value)) * 100, 1),
+    .by = variable
+  ) |>
+  gt()
+```
+
+The observed values should be compared with the questionnaire's coding instructions. Based on the provided assignment example, the observed nonmissing values fall within the expected response categories.
+
+Missing values remain an important consideration, especially for q7, q8, and q37.
+
+# Recode Special Responses and Reverse-Code Items
+
+## No Opinion and No Answer
+
+```{r}
+#| label: check-no-opinion
+
+data |>
+  summarise(
+    across(
+      c(q7, q8, q37),
+      \(x) sum(x == 6, na.rm = TRUE)
+    )
+  )
+```
+
+The code 6 represents No Opinion for q7 and q8 and No Answer for q37. These responses are not valid ratings and should be treated as missing values.
+
+```{r}
+#| label: recode-no-opinion
+
+data <- data |>
+  mutate(
+    across(
+      c(q7, q8, q37),
+      \(x) na_if(x, 6)
+    )
+  )
+```
+
+## Reverse Coding
+
+```{r}
+#| label: reverse-code
+
+data <- data |>
+  mutate(
+    q7r = 6 - as.numeric(q7),
+    q8r = 6 - as.numeric(q8),
+    q10r = 5 - as.numeric(q10),
+    q37r = 6 - as.numeric(q37)
+  ) |>
+  set_variable_labels(
+    q7r = "Savings rates (higher = more favorable)",
+    q8r = "Borrowing Interest Rates (Reversed: Higher = Higher Rates)",
+    q10r = "Statement accuracy (higher = better)",
+    q37r = "Overall rating (higher = better)"
+  ) |>
+  set_value_labels(
+    q7r = c(
+      "Very Low" = 1,
+      "Low" = 2,
+      "Average" = 3,
+      "High" = 4,
+      "Very High" = 5
+    ),
+    q8r = c(
+      "Very Low" = 1,
+      "Low" = 2,
+      "Average" = 3,
+      "High" = 4,
+      "Very High" = 5
+    ),
+    q10r = c(
+      "Poor" = 1,
+      "Fair" = 2,
+      "Good" = 3,
+      "Excellent" = 4
+    ),
+    q37r = c(
+      "Very Poor" = 1,
+      "Poor" = 2,
+      "Average" = 3,
+      "Good" = 4,
+      "Excellent" = 5
+    )
+  )
+```
+
+Reverse coding was applied to q7, q8, q10, and q37 so that higher values represent more favorable evaluations.
+
+### Questions to Answer
+
+**Why should q9 not be reverse-coded?**
+
+Q9 measures the frequency of statements. The most favorable response is About Right, which is located in the middle of the scale. Therefore, simply reversing the scale would not produce a meaningful favorable-to-unfavorable order.
+
+A more appropriate approach would be to create a binary variable indicating whether the respondent selected About Right.
+
+**Why should q13 through q26 not be averaged into one score?**
+
+These questions describe awareness and usage of different products and services. They are not direct evaluations of service quality, and combining them into a single average would make interpretation difficult.
+
+A more useful approach would be to summarize the frequency or percentage of respondents in each awareness category for each service.
+
+## Awareness Items as Ordinal Scale
+
+For this exercise, the awareness variables are also reverse-coded under the hypothetical assumption that they are ordinal.
+
+The original variables are retained, and separate reversed variables are created.
+
+```{r}
+#| label: awareness-reverse
+
+for (v in paste0("q", 13:26)) {
+  new_name <- paste0(v, "r")
+
+  data[[new_name]] <- 4 - as.numeric(data[[v]])
+
+  data[[new_name]] <- labelled(
+    data[[new_name]],
+    labels = c(
+      "Unaware" = 1,
+      "Aware but Have Not Used" = 2,
+      "Aware and Have Used" = 3
+    ),
+    label = paste(
+      "Reversed awareness and usage:",
+      v
+    )
+  )
+}
+
+data |>
+  select(q13, q13r, q14, q14r) |>
+  head()
+```
+
+These reversed awareness variables are for demonstrating recoding. They are not included in a combined performance index.
+
+## Verify the Recoding
+
+```{r}
+#| label: verify-recode
+
+data |> count(q7, q7r)
+data |> count(q8, q8r)
+data |> count(q10, q10r)
+data |> count(q37, q37r)
+data |> count(q13, q13r)
+```
+
+The cross-tabulations verify that the original minimum becomes the reversed maximum and vice versa. Missing values remain missing.
+
+# Evaluate Candidate Multi-Item Measures
+
+## Employee Proficiency
+
+```{r}
+#| label: employee-alpha
+
+employee_items <- data |>
+  select(q3:q6) |>
+  remove_val_labels() |>
+  remove_var_label()
+
+employee_alpha <- psych::alpha(employee_items)
+
+employee_alpha$total
+employee_alpha$item.stats
+```
+
+```{r}
+#| label: employee-fa
+
+employee_fa <- psych::fa(
+  employee_items,
+  nfactors = 1,
+  rotate = "none",
+  fm = "minres"
+)
+
+employee_fa$loadings
+employee_fa$communality
+```
+
+## Operational Effectiveness
+
+```{r}
+#| label: operations-alpha
+
+operations_items <- data |>
+  select(q30:q34) |>
+  remove_val_labels() |>
+  remove_var_label()
+
+operations_alpha <- psych::alpha(operations_items)
+
+operations_alpha$total
+operations_alpha$item.stats
+```
+
+```{r}
+#| label: operations-fa
+
+operations_fa <- psych::fa(
+  operations_items,
+  nfactors = 1,
+  rotate = "none",
+  fm = "minres"
+)
+
+operations_fa$loadings
+operations_fa$communality
+```
+
+## Questions to Answer
+
+### Employee Proficiency
+
+The employee proficiency measure includes q3 through q6, covering courtesy, helpfulness, professionalism, and availability.
+
+According to the assignment example, Cronbach's alpha is approximately 0.87, indicating good internal consistency. The corrected item-total correlations are positive and reasonably strong, suggesting that all four items contribute to the measure.
+
+The one-factor analysis produces positive loadings ranging from approximately 0.72 to 0.92. These results support a common underlying employee proficiency factor.
+
+Because the items have related meanings, use the same response scale, and show good reliability, I recommend creating an employee proficiency index.
+
+### Operational Effectiveness
+
+The operational effectiveness measure includes q30 through q34.
+
+The assignment example reports Cronbach's alpha of approximately 0.54, indicating relatively weak internal consistency.
+
+The corrected item-total correlations are positive but generally weak, and the one-factor loadings range from approximately 0.30 to 0.79. Q32 has the strongest loading, while several other items contribute less to the common factor.
+
+Although the questions relate to Credit Union operations, they evaluate different aspects of performance, including rates, confidentiality, promptness, member needs, and loan application simplicity.
+
+Therefore, I do not recommend creating one overall operational effectiveness index. It would be more appropriate to analyze these variables separately.
+
+## Create Indexes Only When Justified
+
+```{r}
+#| label: create-indexes
+
+data <- data |>
+  mutate(
+    employee_proficiency_index = rowMeans(
+      pick(q3:q6),
+      na.rm = TRUE
+    ),
+    employee_proficiency_index = if_else(
+      is.nan(employee_proficiency_index),
+      NA_real_,
+      employee_proficiency_index
+    )
+  ) |>
+  set_variable_labels(
+    employee_proficiency_index =
+      "Employee Proficiency Index (Mean of Q3-Q6)"
+  )
+
+summary(data$employee_proficiency_index)
+```
+
+Only the employee proficiency index is created because the reliability and factor analysis provide stronger support for combining q3 through q6.
+
+The operational effectiveness variables remain separate.
+
+# Report Data Preparation Decisions
+
+::: {.callout-note title="Data Preparation Narrative"}
+
+The Case 31 Employees Federal Credit Union survey data were imported from an SPSS file using the `haven` package in R. The original dataset contained 128 observations and 34 variables.
+
+A data dictionary was created to examine variable names, labels, response codes, data types, and missing values. Several incomplete value labels were identified and corrected, including awareness categories and No Answer responses.
+
+The original dataset was preserved as `data_raw`, while a separate analysis dataset was created using the questionnaire variables. Two precomputed employee performance variables were excluded because their calculation methods were not documented.
+
+Special responses such as No Opinion and No Answer were treated as missing rather than valid ratings. Reverse coding was applied to q7, q8, q10, and q37 to make higher values represent more favorable evaluations. Cross-tabulations were used to verify the transformations.
+
+The employee proficiency items demonstrated good internal consistency and generally strong one-factor loadings. Therefore, an employee proficiency index was created using the mean of q3 through q6.
+
+In contrast, the operational effectiveness items showed weaker reliability and less consistent factor loadings. These items were retained separately rather than combined into one index.
+
+One limitation is that the analysis is based on an existing survey dataset with some missing responses. In addition, treating ordinal survey responses as approximately interval values when calculating an index involves an analytical assumption.
+
+Overall, the preparation process improves the clarity, consistency, and reproducibility of the dataset for further analysis.
+
+:::
+
+# Confirm Data Wrangling Completeness
+
+```{r}
+#| label: final-dictionary
+
+final_dictionary <- tibble(
+  variable = names(data),
+  variable_label = map_chr(
+    data,
+    \(x) attr(x, "label") %||% ""
+  ),
+  value_labels = map_chr(
+    data,
+    \(x) {
+      labs <- attr(x, "labels")
+      if (is.null(labs)) {
+        ""
+      } else {
+        str_c(
+          names(labs),
+          "=",
+          labs,
+          collapse = "; "
+        )
+      }
+    }
+  ),
+  missing = map_int(
+    data,
+    \(x) sum(is.na(x))
+  )
+)
+
+final_dictionary |> gt()
+```
+
+The final data dictionary documents the cleaned variables, updated labels, and missing values. The original questionnaire items and the newly created variables are available for further analysis.
+
+# Save Cleaned Data to a New SPSS File
+
+```{r}
+#| label: save-spss
+
+write_sav(
+  data,
+  "Case31_ES_cleaned.sav"
+)
+
+file.exists("Case31_ES_cleaned.sav")
+```
+
+The cleaned dataset is saved as a separate SPSS file. The filename includes my initials and the word "cleaned," as required.
+
+# Render and Publish the Report
+
+The completed Quarto document is rendered as an HTML report and prepared for publication through GitHub Pages.
+
+The report includes the data preparation workflow, variable documentation, recoding decisions, reliability analysis, factor analysis, and cleaned data export.
+
+# Submission Requirements
+
+The submission includes the QMD source file and rendered HTML report. The cleaned SPSS file is also generated as part of the data preparation workflow.
+
+# Appendix
+
+## GitHub Pages
+
+[View My GitHub Pages Report](https://willysu.github.io/case31-data-preparation/)
+
+## GitHub Repository
+
+[View My GitHub Repository](https://github.com/WillySuu/case31-data-preparation)
